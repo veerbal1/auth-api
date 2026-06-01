@@ -6,7 +6,7 @@ use tracing::instrument;
 use crate::{
     domain::{
         HealthResponse, LoginRequest, LoginResponse, LogoutResponse, MeResponse, MeUser,
-        RegisterRequest, RegisterResponse, SESSION_DURATION_SECS, Session, ValidationError,
+        RegisterRequest, RegisterResponse, Session, ValidationError,
         current_timestamp, generate_session_token, validate_login_parameters, validate_new_user,
         verify_password,
     },
@@ -128,7 +128,7 @@ pub async fn me(
     if let Some(index) = session_index {
         let session = &sessions[index];
         let email = session.email.clone();
-        if session.created_at + SESSION_DURATION_SECS < current_timestamp() {
+        if session.created_at + app_state.session_duration_seconds < current_timestamp() {
             sessions.remove(index);
             tracing::warn!(email = email, "session expired");
             let res = MeResponse {

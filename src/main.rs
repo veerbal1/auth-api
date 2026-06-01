@@ -13,11 +13,16 @@ mod state;
 
 #[tokio::main]
 async fn main() {
+    let address = std::env::var("ADDRESS").unwrap_or_else(|_| "127.0.0.1:3000".to_string());
+    let session_duration_seconds: u64 = std::env::var("SESSION_DURATION_SECS")
+        .unwrap_or_else(|_| "10".to_string())
+        .parse()
+        .unwrap();
     tracing_subscriber::fmt()
         .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
         .init();
-    tracing::info!("auth-api starting on 127.0.0.1:3000");
-    let listener = TcpListener::bind("127.0.0.1:3000").await.unwrap();
+    tracing::info!("auth-api starting on {}", address);
+    let listener = TcpListener::bind(address).await.unwrap();
     let app = Router::new()
         .route("/", get(home))
         .route("/health", get(health))
@@ -28,6 +33,7 @@ async fn main() {
         .with_state(AppState {
             users: Arc::new(Mutex::new(Vec::new())),
             sessions: Arc::new(Mutex::new(Vec::new())),
+            session_duration_seconds
         });
 
     axum::serve(listener, app).await.unwrap();

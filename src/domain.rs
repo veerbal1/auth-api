@@ -7,8 +7,6 @@ use argon2::{
 use rand_core::RngCore;
 use serde::{Deserialize, Serialize};
 
-pub const SESSION_DURATION_SECS: u64 = 10;
-
 #[derive(Serialize, Debug)]
 pub struct HealthResponse {
     pub service: String,
