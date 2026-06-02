@@ -5,11 +5,10 @@ use axum::{
 };
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
-use sqlx::Row;
 use tracing::instrument;
 
 use crate::{
-    db::insert_user,
+    db::{insert_user, find_user_by_email, insert_session, find_session, delete_session},
     domain::{
         HealthResponse, LoginRequest, LoginResponse, LogoutResponse, MeResponse, MeUser,
         PublicUser, RegisterRequest, RegisterResponse, ValidationError, current_timestamp,
@@ -118,15 +117,12 @@ pub async fn login(
     };
     let normalized_email = input.email.trim().to_lowercase();
 
-    let db_result = sqlx::query("SELECT email, password_hash, name FROM users WHERE email = $1")
-        .bind(&normalized_email)
-        .fetch_optional(&app_state.db)
-        .await;
+    let db_result = find_user_by_email(&app_state.db, &normalized_email).await;
 
     match db_result {
-        Ok(Some(row)) => {
-            let stored_hash: String = row.get("password_hash");
-            let user_email: String = row.get("email");
+        Ok(Some(user)) => {
+            let stored_hash = user.password_hash;
+            let user_email = user.email;
 
             if !verify_password(&input.password, &stored_hash) {
                 tracing::warn!(email = %input.email, "login failed: invalid credentials");
@@ -139,11 +135,7 @@ pub async fn login(
             }
 
             let generated_token = generate_session_token();
-            sqlx::query("INSERT INTO sessions (token, email, created_at) VALUES ($1, $2, $3)")
-                .bind(&generated_token)
-                .bind(&user_email)
-                .bind(current_timestamp() as i64)
-                .execute(&app_state.db)
+            insert_session(&app_state.db, &generated_token, &user_email, current_timestamp() as i64)
                 .await
                 .expect("failed to insert session");
 
@@ -185,24 +177,15 @@ pub async fn me(
     let token = auth.token();
 
     let session_info = {
-        let row = sqlx::query("SELECT email, created_at FROM sessions WHERE token = $1")
-            .bind(token)
-            .fetch_optional(&app_state.db)
-            .await;
+        let row = find_session(&app_state.db, token).await;
         match row {
-            Ok(Some(row)) => {
-                let email: String = row.get("email");
-                let created_at: i64 = row.get("created_at");
+            Ok(Some(session)) => {
                 let expired =
-                    created_at as u64 + app_state.session_duration_seconds < current_timestamp();
+                    session.created_at as u64 + app_state.session_duration_seconds < current_timestamp();
                 if expired {
-                    sqlx::query("DELETE FROM sessions WHERE token = $1")
-                        .bind(token)
-                        .execute(&app_state.db)
-                        .await
-                        .ok();
+                    delete_session(&app_state.db, token).await.ok();
                 }
-                Some((email, expired))
+                Some((session.email, expired))
             }
             _ => None,
         }
@@ -219,16 +202,13 @@ pub async fn me(
                 };
                 return (StatusCode::UNAUTHORIZED, Json(res));
             }
-            let db_user = sqlx::query("SELECT email, name FROM users WHERE email = $1")
-                .bind(&email)
-                .fetch_optional(&app_state.db)
-                .await;
+            let db_user = find_user_by_email(&app_state.db, &email).await;
             match db_user {
-                Ok(Some(row)) => {
+                Ok(Some(user_row)) => {
                     tracing::info!(email = %email, "authenticated request successful");
                     let user = MeUser {
-                        email: row.get("email"),
-                        name: row.get("name"),
+                        email: user_row.email,
+                        name: user_row.name,
                     };
                     let res = MeResponse {
                         status: "success".to_string(),
@@ -275,14 +255,11 @@ pub async fn logout(
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
 ) -> (StatusCode, Json<LogoutResponse>) {
     let token = auth.token();
-    let result = sqlx::query("DELETE FROM sessions WHERE token = $1")
-        .bind(token)
-        .execute(&app_state.db)
-        .await;
+    let result = delete_session(&app_state.db, token).await;
 
     match result {
-        Ok(query_result) => {
-            if query_result.rows_affected() > 0 {
+        Ok(rows_affected) => {
+            if rows_affected > 0 {
                 tracing::info!("logout successful");
                 (
                     StatusCode::OK,
@@ -319,15 +296,12 @@ pub async fn get_user(
     State(app_state): State<AppState>,
     Path(email): Path<String>,
 ) -> (StatusCode, Json<PublicUser>) {
-    let result = sqlx::query("SELECT email, name FROM users WHERE email = $1")
-        .bind(&email)
-        .fetch_optional(&app_state.db)
-        .await;
+    let result = find_user_by_email(&app_state.db, &email).await;
     match result {
-        Ok(Some(row)) => {
+        Ok(Some(user_row)) => {
             let user = PublicUser {
-                email: row.get("email"),
-                name: row.get("name"),
+                email: user_row.email,
+                name: user_row.name,
             };
             (StatusCode::OK, Json(user))
         }
