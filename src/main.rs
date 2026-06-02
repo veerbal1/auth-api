@@ -2,7 +2,7 @@ use axum::routing::post;
 use axum::{Router, routing::get};
 use tokio::net::TcpListener;
 
-use crate::handlers::{health, home, login, logout, me, register_preview};
+use crate::handlers::{get_user, health, home, login, logout, me, register_preview};
 use crate::state::AppState;
 use sqlx::postgres::PgPoolOptions;
 
@@ -36,6 +36,7 @@ async fn main() {
         .route("/login", post(login))
         .route("/me", get(me))
         .route("/logout", post(logout))
+        .route("/user/{email}", get(get_user))
         .with_state(AppState {
             session_duration_seconds,
             db: pool.clone(),

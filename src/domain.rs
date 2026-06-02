@@ -84,6 +84,12 @@ pub struct MeResponse {
     pub user: Option<MeUser>,
 }
 
+#[derive(Serialize, Debug)]
+pub struct PublicUser {
+    pub email: String,
+    pub name: String,
+}
+
 pub fn current_timestamp() -> u64 {
     let now = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     now.as_secs()

@@ -1,4 +1,8 @@
-use axum::{Json, extract::State, http::StatusCode};
+use axum::{
+    Json,
+    extract::{Path, State},
+    http::StatusCode,
+};
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
 use sqlx::Row;
@@ -7,7 +11,7 @@ use tracing::instrument;
 use crate::{
     domain::{
         HealthResponse, LoginRequest, LoginResponse, LogoutResponse, MeResponse, MeUser,
-        RegisterRequest, RegisterResponse, ValidationError, current_timestamp,
+        PublicUser, RegisterRequest, RegisterResponse, ValidationError, current_timestamp,
         generate_session_token, validate_login_parameters, validate_new_user, verify_password,
     },
     state::AppState,
@@ -307,5 +311,38 @@ pub async fn logout(
                 }),
             )
         }
+    }
+}
+
+pub async fn get_user(
+    State(app_state): State<AppState>,
+    Path(email): Path<String>,
+) -> (StatusCode, Json<PublicUser>) {
+    let result = sqlx::query("SELECT email, name FROM users WHERE email = $1")
+        .bind(&email)
+        .fetch_optional(&app_state.db)
+        .await;
+    match result {
+        Ok(Some(row)) => {
+            let user = PublicUser {
+                email: row.get("email"),
+                name: row.get("name"),
+            };
+            (StatusCode::OK, Json(user))
+        }
+        Ok(None) => (
+            StatusCode::NOT_FOUND,
+            Json(PublicUser {
+                email,
+                name: "not found".to_string(),
+            }),
+        ),
+        Err(_) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(PublicUser {
+                email,
+                name: "error".to_string(),
+            }),
+        ),
     }
 }
