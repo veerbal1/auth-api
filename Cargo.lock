@@ -62,8 +62,10 @@ dependencies = [
  "hex",
  "rand_core 0.6.4",
  "serde",
+ "serde_json",
  "sqlx",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

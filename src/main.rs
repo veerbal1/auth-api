@@ -1,14 +1,7 @@
-use axum::routing::post;
-use axum::{Router, routing::get};
-use tokio::net::TcpListener;
-
-use crate::handlers::{get_user, health, home, login, logout, me, register_preview};
-use crate::state::AppState;
+use auth_api::create_app;
+use auth_api::state::AppState;
 use sqlx::postgres::PgPoolOptions;
-
-mod domain;
-mod handlers;
-mod state;
+use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() {
@@ -29,18 +22,9 @@ async fn main() {
         .init();
     tracing::info!("auth-api starting on {}", address);
     let listener = TcpListener::bind(address).await.unwrap();
-    let app = Router::new()
-        .route("/", get(home))
-        .route("/health", get(health))
-        .route("/register", post(register_preview))
-        .route("/login", post(login))
-        .route("/me", get(me))
-        .route("/logout", post(logout))
-        .route("/user/{email}", get(get_user))
-        .with_state(AppState {
-            session_duration_seconds,
-            db: pool.clone(),
-        });
-
+    let app = create_app(AppState {
+        session_duration_seconds,
+        db: pool.clone(),
+    });
     axum::serve(listener, app).await.unwrap();
 }

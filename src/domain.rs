@@ -148,3 +148,99 @@ impl std::fmt::Display for ValidationError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn valid_registration_passes_validation() {
+        let req = RegisterRequest {
+            email: "test@example.com".to_string(),
+            name: "Test".to_string(),
+            password: "secret123".to_string(),
+        };
+        let result = validate_new_user(req);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn empty_email_fails() {
+        let req = RegisterRequest {
+            email: "   ".to_string(),
+            name: "Test".to_string(),
+            password: "secret123".to_string(),
+        };
+        let result = validate_new_user(req);
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn empty_name_fails() {
+        let req = RegisterRequest {
+            email: "test@example.com".to_string(),
+            name: "   ".to_string(),
+            password: "secret123".to_string(),
+        };
+        assert!(validate_new_user(req).is_err());
+    }
+
+    #[test]
+    fn empty_password_fails() {
+        let req = RegisterRequest {
+            email: "test@example.com".to_string(),
+            name: "Test".to_string(),
+            password: "   ".to_string(),
+        };
+        assert!(validate_new_user(req).is_err());
+    }
+
+    #[test]
+    fn login_with_valid_input_passes() {
+        let req = LoginRequest {
+            email: "test@example.com".to_string(),
+            password: "secret".to_string(),
+        };
+        assert!(validate_login_parameters(&req).is_ok());
+    }
+
+    #[test]
+    fn login_with_empty_email_fails() {
+        let req = LoginRequest {
+            email: "  ".to_string(),
+            password: "p".to_string(),
+        };
+        assert!(validate_login_parameters(&req).is_err());
+    }
+
+    #[test]
+    fn email_is_lowercased() {
+        let req = RegisterRequest {
+            email: "Test@Example.COM".to_string(),
+            name: "Test".to_string(),
+            password: "secret123".to_string(),
+        };
+        let user = validate_new_user(req).unwrap();
+        assert_eq!(user.email, "test@example.com");
+    }
+
+    #[test]
+    fn hash_and_verify_password_roundtrip() {
+        let password = "mySecret123";
+        let hash = hash_password(password).unwrap();
+        assert!(verify_password(password, &hash));
+    }
+
+    #[test]
+    fn wrong_password_fails_verification() {
+        let hash = hash_password("correct").unwrap();
+        assert!(!verify_password("wrong", &hash));
+    }
+
+    #[test]
+    fn session_token_is_64_hex_chars() {
+        let token = generate_session_token();
+        assert_eq!(token.len(), 64);
+        assert!(token.chars().all(|c| c.is_ascii_hexdigit()));
+    }
+}
