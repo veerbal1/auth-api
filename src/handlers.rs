@@ -9,6 +9,7 @@ use sqlx::Row;
 use tracing::instrument;
 
 use crate::{
+    db::insert_user,
     domain::{
         HealthResponse, LoginRequest, LoginResponse, LogoutResponse, MeResponse, MeUser,
         PublicUser, RegisterRequest, RegisterResponse, ValidationError, current_timestamp,
@@ -53,13 +54,13 @@ pub async fn register_preview(
     let result = validate_new_user(input);
     match result {
         Ok(value) => {
-            let insert_result =
-                sqlx::query("INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3)")
-                    .bind(&value.email)
-                    .bind(&value.password_hash)
-                    .bind(&value.name)
-                    .execute(&app_state.db)
-                    .await;
+            let insert_result = insert_user(
+                &app_state.db,
+                &value.email,
+                &value.password_hash,
+                &value.name,
+            )
+            .await;
             match insert_result {
                 Ok(_) => {
                     tracing::info!(email = %value.email, "registration successful");
