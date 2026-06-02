@@ -6,7 +6,7 @@ REST API for user registration, login, session management, and logout. Uses Argo
 
 ## Stack
 
-**Rust** · **Tokio** · **Axum** · **Argon2** · **Serde** · **Tracing**
+**Rust** · **Tokio** · **Axum** · **SQLx** · **PostgreSQL** · **Docker** · **Argon2** · **Serde** · **Tracing**
 
 ## Endpoints
 
@@ -14,6 +14,7 @@ REST API for user registration, login, session management, and logout. Uses Argo
 |--------|-----------|--------|-----------------------------|
 | GET    | /         | None   | Root                        |
 | GET    | /health   | None   | Process liveness check      |
+| GET    | /user/{email} | None   | Public user info            |
 | POST   | /register | None   | Create user                 |
 | POST   | /login    | None   | Authenticate, get token     |
 | GET    | /me       | Bearer | Current user info           |
@@ -22,8 +23,8 @@ REST API for user registration, login, session management, and logout. Uses Argo
 ## Quick Start
 
 ```bash
-cargo run
-# Server starts at http://127.0.0.1:3000
+docker compose up -d
+# API at http://localhost:3000, Postgres at localhost:5432
 ```
 
 ## API Examples
@@ -76,23 +77,33 @@ curl -s -X POST http://127.0.0.1:3000/logout \
 - No secret leakage in logs
 - Uniform login errors
 
-### Pending
-
+### Completed
+- Argon2 password hashing with OsRng
 - Config from environment variables
-- PostgreSQL schema, migrations, and SQLx integration
-- Database-backed users and sessions (persist across restarts)
-- Unit, integration, and database-backed integration tests
-- Docker Compose (Postgres + API) and Dockerfile
-- OpenAPI contract documentation
+- PostgreSQL schema, migrations, SQLx pool
+- Database-backed users and sessions
+- Unit tests (10), integration tests (2)
+- Docker Compose (Postgres + API)
+- Dockerfile (two-stage build)
+- Structured logging with tracing
+- API documentation
 
 ## Architecture
 
 ```
 src/
-├── main.rs       # Router setup
+├── main.rs       # Entry point
+├── lib.rs        # create_app, module declarations
 ├── handlers.rs   # Request handlers
 ├── domain.rs     # Core types & logic
-└── state.rs      # App state (Arc<Mutex>)
+├── state.rs      # App state
+└── db.rs         # Database operations
+
+migrations/       # SQLx migrations
+tests/            # Integration tests
+Dockerfile        # Two-stage build
+compose.yaml      # Postgres + API
+API.md            # Endpoint documentation
 ```
 
 ## Design Decisions
