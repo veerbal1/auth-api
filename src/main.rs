@@ -39,7 +39,6 @@ async fn main() {
         .route("/me", get(me))
         .route("/logout", post(logout))
         .with_state(AppState {
-            users: Arc::new(Mutex::new(Vec::new())),
             sessions: Arc::new(Mutex::new(Vec::new())),
             session_duration_seconds,
             db: pool.clone(),

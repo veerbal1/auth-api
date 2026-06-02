@@ -1,6 +1,7 @@
 use axum::{Json, extract::State, http::StatusCode};
 use axum_extra::TypedHeader;
 use headers::{Authorization, authorization::Bearer};
+use sqlx::Row;
 use tracing::instrument;
 
 use crate::{
@@ -48,22 +49,41 @@ pub async fn register_preview(
     let result = validate_new_user(input);
     match result {
         Ok(value) => {
-            let mut users = app_state.users.lock().unwrap();
-            if users.iter().any(|u| u.email == value.email) {
-                let res = RegisterResponse {
-                    status: "failed".to_string(),
-                    message: format!("{}", ValidationError::EmailAlreadyExists),
-                };
-                tracing::warn!(email = %value.email, "registration failed: email already exists");
-                return (StatusCode::BAD_REQUEST, Json(res));
-            };
-            tracing::info!(email = %value.email, "registration successful");
-            users.push(value);
-            let res = RegisterResponse {
-                status: "success".to_string(),
-                message: "User created successfully".to_string(),
-            };
-            (StatusCode::OK, Json(res))
+            let insert_result =
+                sqlx::query("INSERT INTO users (email, password_hash, name) VALUES ($1, $2, $3)")
+                    .bind(&value.email)
+                    .bind(&value.password_hash)
+                    .bind(&value.name)
+                    .execute(&app_state.db)
+                    .await;
+            match insert_result {
+                Ok(_) => {
+                    tracing::info!(email = %value.email, "registration successful");
+                    let res = RegisterResponse {
+                        status: "success".to_string(),
+                        message: "User created successfully".to_string(),
+                    };
+                    return (StatusCode::CREATED, Json(res));
+                }
+                Err(e) => {
+                    if let sqlx::Error::Database(db_error) = &e
+                        && db_error.constraint() == Some("users_email_key")
+                    {
+                        tracing::warn!(email = %value.email, "registration failed: email already exists");
+                        let res = RegisterResponse {
+                            status: "failed".to_string(),
+                            message: format!("{}", ValidationError::EmailAlreadyExists),
+                        };
+                        return (StatusCode::CONFLICT, Json(res));
+                    }
+                    tracing::warn!(error = %e, "registration failed: database error");
+                    let res = RegisterResponse {
+                        status: "failed".to_string(),
+                        message: "Internal server error".to_string(),
+                    };
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(res))
+                }
+            }
         }
         Err(error) => {
             let res = RegisterResponse {
@@ -91,27 +111,35 @@ pub async fn login(
         };
         return (StatusCode::UNAUTHORIZED, Json(res));
     };
-    let users = app_state.users.lock().unwrap();
-    let result = users.iter().find(|&user| input.email == user.email);
-    if let Some(user) = result {
-        let result = verify_password(&input.password, &user.password_hash);
-        if !result {
-            tracing::warn!(email = %input.email, "login failed: invalid credentials");
-            let res = LoginResponse {
-                status: "failed".to_string(),
-                message: "Either email or password is invalid".to_string(),
-                token: None,
-            };
-            (StatusCode::UNAUTHORIZED, Json(res))
-        } else {
+    let db_result = sqlx::query("SELECT email, password_hash, name FROM users WHERE email = $1")
+        .bind(&input.email)
+        .fetch_optional(&app_state.db)
+        .await;
+
+    match db_result {
+        Ok(Some(row)) => {
+            let stored_hash: String = row.get("password_hash");
+            let user_email: String = row.get("email");
+
+            if !verify_password(&input.password, &stored_hash) {
+                tracing::warn!(email = %input.email, "login failed: invalid credentials");
+                let res = LoginResponse {
+                    status: "failed".to_string(),
+                    message: "Either email or password is invalid".to_string(),
+                    token: None,
+                };
+                return (StatusCode::UNAUTHORIZED, Json(res));
+            }
+
             let generated_token = generate_session_token();
             let mut sessions = app_state.sessions.lock().unwrap();
             sessions.push(Session {
                 token: generated_token.clone(),
-                email: user.email.to_owned(),
+                email: user_email,
                 created_at: current_timestamp(),
             });
-            tracing::info!(email = %user.email, "login successful");
+
+            tracing::info!(email = %input.email, "login successful");
             let res = LoginResponse {
                 status: "success".to_string(),
                 message: "User found".to_string(),
@@ -119,14 +147,25 @@ pub async fn login(
             };
             (StatusCode::OK, Json(res))
         }
-    } else {
-        tracing::warn!(email = %input.email, "login failed: user not found");
-        let res = LoginResponse {
-            status: "failed".to_string(),
-            message: "Either email or password is invalid".to_string(),
-            token: None,
-        };
-        (StatusCode::UNAUTHORIZED, Json(res))
+        Ok(None) => {
+            tracing::warn!(email = %input.email, "login failed: user not found");
+            let res = LoginResponse {
+                status: "failed".to_string(),
+                message: "Either email or password is invalid".to_string(),
+                token: None,
+            };
+            (StatusCode::UNAUTHORIZED, Json(res))
+        }
+
+        Err(e) => {
+            tracing::warn!(error = %e, "login failed: database error");
+            let res = LoginResponse {
+                status: "failed".to_string(),
+                message: "Internal server error".to_string(),
+                token: None,
+            };
+            (StatusCode::INTERNAL_SERVER_ERROR, Json(res))
+        }
     }
 }
 
@@ -136,54 +175,83 @@ pub async fn me(
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
 ) -> (StatusCode, Json<MeResponse>) {
     let token = auth.token();
-    let mut sessions = app_state.sessions.lock().unwrap();
-    let session_index = sessions.iter().position(|session| session.token == token);
-    if let Some(index) = session_index {
-        let session = &sessions[index];
-        let email = session.email.clone();
-        if session.created_at + app_state.session_duration_seconds < current_timestamp() {
-            sessions.remove(index);
-            tracing::warn!(email = email, "session expired");
-            let res = MeResponse {
-                status: "failed".to_string(),
-                message: "Session expired".to_string(),
-                user: None,
-            };
-            return (StatusCode::UNAUTHORIZED, Json(res));
-        }
-        drop(sessions);
-        let users = app_state.users.lock().unwrap();
-        let user_result = users.iter().find(|user| user.email == email);
 
-        if let Some(user) = user_result {
-            tracing::info!(email = %user.email, "authenticated request successful");
-            let user = MeUser {
-                email: user.email.clone(),
-                name: user.name.clone(),
-            };
-            let res = MeResponse {
-                status: "success".to_string(),
-                message: "Session found".to_string(),
-                user: Some(user),
-            };
-            (StatusCode::OK, Json(res))
-        } else {
-            tracing::warn!(email = %email, "authenticated request failed: user not found");
+    let session_info = {
+        let mut sessions = app_state.sessions.lock().unwrap();
+        let pos = sessions.iter().position(|s| s.token == token);
+        match pos {
+            Some(index) => {
+                let session = &sessions[index];
+                let email = session.email.clone();
+                let expired =
+                    session.created_at + app_state.session_duration_seconds < current_timestamp();
+                if expired {
+                    sessions.remove(index);
+                }
+                Some((email, expired))
+            }
+            None => None,
+        }
+    };
+
+    match session_info {
+        Some((email, expired)) => {
+            if expired {
+                tracing::warn!(email = email, "session expired");
+                let res = MeResponse {
+                    status: "failed".to_string(),
+                    message: "Session expired".to_string(),
+                    user: None,
+                };
+                return (StatusCode::UNAUTHORIZED, Json(res));
+            }
+            let db_user = sqlx::query("SELECT email, name FROM users WHERE email = $1")
+                .bind(&email)
+                .fetch_optional(&app_state.db)
+                .await;
+            match db_user {
+                Ok(Some(row)) => {
+                    tracing::info!(email = %email, "authenticated request successful");
+                    let user = MeUser {
+                        email: row.get("email"),
+                        name: row.get("name"),
+                    };
+                    let res = MeResponse {
+                        status: "success".to_string(),
+                        message: "Session found".to_string(),
+                        user: Some(user),
+                    };
+                    (StatusCode::OK, Json(res))
+                }
+                Ok(None) => {
+                    tracing::warn!(email = %email, "authenticated request failed: user not found");
+                    let res = MeResponse {
+                        status: "failed".to_string(),
+                        message: "User not found".to_string(),
+                        user: None,
+                    };
+                    (StatusCode::UNAUTHORIZED, Json(res))
+                }
+                Err(e) => {
+                    tracing::warn!(error = %e, "authenticated request failed: database error");
+                    let res = MeResponse {
+                        status: "failed".to_string(),
+                        message: "Internal server error".to_string(),
+                        user: None,
+                    };
+                    (StatusCode::INTERNAL_SERVER_ERROR, Json(res))
+                }
+            }
+        }
+        None => {
+            tracing::warn!("authenticated request failed: session not found");
             let res = MeResponse {
                 status: "failed".to_string(),
-                message: "User not found".to_string(),
+                message: "Session not found".to_string(),
                 user: None,
             };
             (StatusCode::UNAUTHORIZED, Json(res))
         }
-    } else {
-        tracing::warn!("authenticated request failed: session not found");
-        let res = MeResponse {
-            status: "failed".to_string(),
-            message: "Session not found".to_string(),
-            user: None,
-        };
-        (StatusCode::UNAUTHORIZED, Json(res))
     }
 }
 
