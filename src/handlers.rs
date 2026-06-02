@@ -111,8 +111,10 @@ pub async fn login(
         };
         return (StatusCode::UNAUTHORIZED, Json(res));
     };
+    let normalized_email = input.email.trim().to_lowercase();
+
     let db_result = sqlx::query("SELECT email, password_hash, name FROM users WHERE email = $1")
-        .bind(&input.email)
+        .bind(&normalized_email)
         .fetch_optional(&app_state.db)
         .await;
 

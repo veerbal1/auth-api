@@ -118,7 +118,7 @@ pub fn validate_new_user(req: RegisterRequest) -> Result<User, ValidationError> 
     };
     Ok(User {
         name: req.name.trim().to_string(),
-        email: req.email.trim().to_string(),
+        email: req.email.trim().to_lowercase().to_string(),
         password_hash: hash_password(req.password.trim()).unwrap(),
     })
 }
