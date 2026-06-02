@@ -7,7 +7,7 @@ use tracing::instrument;
 use crate::{
     domain::{
         HealthResponse, LoginRequest, LoginResponse, LogoutResponse, MeResponse, MeUser,
-        RegisterRequest, RegisterResponse, Session, ValidationError, current_timestamp,
+        RegisterRequest, RegisterResponse, ValidationError, current_timestamp,
         generate_session_token, validate_login_parameters, validate_new_user, verify_password,
     },
     state::AppState,
@@ -134,12 +134,13 @@ pub async fn login(
             }
 
             let generated_token = generate_session_token();
-            let mut sessions = app_state.sessions.lock().unwrap();
-            sessions.push(Session {
-                token: generated_token.clone(),
-                email: user_email,
-                created_at: current_timestamp(),
-            });
+            sqlx::query("INSERT INTO sessions (token, email, created_at) VALUES ($1, $2, $3)")
+                .bind(&generated_token)
+                .bind(&user_email)
+                .bind(current_timestamp() as i64)
+                .execute(&app_state.db)
+                .await
+                .expect("failed to insert session");
 
             tracing::info!(email = %input.email, "login successful");
             let res = LoginResponse {
@@ -179,20 +180,26 @@ pub async fn me(
     let token = auth.token();
 
     let session_info = {
-        let mut sessions = app_state.sessions.lock().unwrap();
-        let pos = sessions.iter().position(|s| s.token == token);
-        match pos {
-            Some(index) => {
-                let session = &sessions[index];
-                let email = session.email.clone();
+        let row = sqlx::query("SELECT email, created_at FROM sessions WHERE token = $1")
+            .bind(token)
+            .fetch_optional(&app_state.db)
+            .await;
+        match row {
+            Ok(Some(row)) => {
+                let email: String = row.get("email");
+                let created_at: i64 = row.get("created_at");
                 let expired =
-                    session.created_at + app_state.session_duration_seconds < current_timestamp();
+                    created_at as u64 + app_state.session_duration_seconds < current_timestamp();
                 if expired {
-                    sessions.remove(index);
+                    sqlx::query("DELETE FROM sessions WHERE token = $1")
+                        .bind(token)
+                        .execute(&app_state.db)
+                        .await
+                        .ok();
                 }
                 Some((email, expired))
             }
-            None => None,
+            _ => None,
         }
     };
 
@@ -263,27 +270,40 @@ pub async fn logout(
     TypedHeader(auth): TypedHeader<Authorization<Bearer>>,
 ) -> (StatusCode, Json<LogoutResponse>) {
     let token = auth.token();
-    let mut sessions = app_state.sessions.lock().unwrap();
-    let pos = sessions.iter().position(|s| s.token == token);
-    match pos {
-        Some(idx) => {
-            sessions.remove(idx);
-            tracing::info!("logout successful");
-            (
-                StatusCode::OK,
-                Json(LogoutResponse {
-                    status: "success".to_string(),
-                    message: "Logged out successfully".to_string(),
-                }),
-            )
+    let result = sqlx::query("DELETE FROM sessions WHERE token = $1")
+        .bind(token)
+        .execute(&app_state.db)
+        .await;
+
+    match result {
+        Ok(query_result) => {
+            if query_result.rows_affected() > 0 {
+                tracing::info!("logout successful");
+                (
+                    StatusCode::OK,
+                    Json(LogoutResponse {
+                        status: "success".to_string(),
+                        message: "Logged out successfully".to_string(),
+                    }),
+                )
+            } else {
+                tracing::warn!("logout failed: session not found");
+                (
+                    StatusCode::UNAUTHORIZED,
+                    Json(LogoutResponse {
+                        status: "failed".to_string(),
+                        message: "Session not found".to_string(),
+                    }),
+                )
+            }
         }
-        None => {
-            tracing::warn!("logout failed: session not found");
+        Err(e) => {
+            tracing::warn!(error = %e, "logout failed: database error");
             (
-                StatusCode::UNAUTHORIZED,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(LogoutResponse {
                     status: "failed".to_string(),
-                    message: "Session not found".to_string(),
+                    message: "Internal server error".to_string(),
                 }),
             )
         }

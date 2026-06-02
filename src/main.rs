@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 use axum::routing::post;
 use axum::{Router, routing::get};
 use tokio::net::TcpListener;
@@ -39,7 +37,6 @@ async fn main() {
         .route("/me", get(me))
         .route("/logout", post(logout))
         .with_state(AppState {
-            sessions: Arc::new(Mutex::new(Vec::new())),
             session_duration_seconds,
             db: pool.clone(),
         });
