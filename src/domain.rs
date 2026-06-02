@@ -11,6 +11,7 @@ use serde::{Deserialize, Serialize};
 pub struct HealthResponse {
     pub service: String,
     pub status: String,
+    pub database: String,
 }
 
 #[derive(Serialize, Debug)]

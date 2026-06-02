@@ -6,9 +6,8 @@ use tracing::instrument;
 use crate::{
     domain::{
         HealthResponse, LoginRequest, LoginResponse, LogoutResponse, MeResponse, MeUser,
-        RegisterRequest, RegisterResponse, Session, ValidationError,
-        current_timestamp, generate_session_token, validate_login_parameters, validate_new_user,
-        verify_password,
+        RegisterRequest, RegisterResponse, Session, ValidationError, current_timestamp,
+        generate_session_token, validate_login_parameters, validate_new_user, verify_password,
     },
     state::AppState,
 };
@@ -17,13 +16,27 @@ pub async fn home() -> &'static str {
     "Bhola Singh"
 }
 
-pub async fn health() -> (StatusCode, Json<HealthResponse>) {
-    let health_response = HealthResponse {
-        service: "auth-api".to_string(),
-        status: "ok".to_string(),
-    };
-
-    (StatusCode::OK, Json(health_response))
+pub async fn health(State(app_state): State<AppState>) -> (StatusCode, Json<HealthResponse>) {
+    let db_result = sqlx::query("SELECT 1").execute(&app_state.db).await;
+    match db_result {
+        Ok(_) => {
+            let health_response = HealthResponse {
+                service: "auth-api".to_string(),
+                status: "ok".to_string(),
+                database: "connected".to_string(),
+            };
+            (StatusCode::OK, Json(health_response))
+        }
+        Err(e) => {
+            tracing::warn!("database health check failed: {}", e);
+            let health_response = HealthResponse {
+                service: "auth-api".to_string(),
+                status: "degraded".to_string(),
+                database: "disconnected".to_string(),
+            };
+            (StatusCode::SERVICE_UNAVAILABLE, Json(health_response))
+        }
+    }
 }
 
 #[instrument(skip(app_state, input))]
